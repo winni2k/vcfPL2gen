@@ -117,6 +117,7 @@ int main() { // int ac, char **av
           sepCharIter = cols[colNum].begin() + sepCharIdx;
       
       vector<double> PLs;
+      PLs.reserve(3);
       if (!pls::parse_numbers(cols[colNum].begin() + firstPLCharIdx,
                               sepCharIter, PLs))
         throw std::runtime_error(
