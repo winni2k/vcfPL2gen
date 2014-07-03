@@ -5,7 +5,6 @@
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/split.hpp>
 
-#include <boost/spirit/include/qi.hpp>
 using namespace std;
 
 static_assert(__cplusplus == 201103L, "C++11 compiler required");
