@@ -4,6 +4,42 @@
 #include <iostream>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/split.hpp>
+#include <boost/config/warning_disable.hpp>
+#include <boost/spirit/include/qi.hpp>
+#include <boost/spirit/include/phoenix_core.hpp>
+#include <boost/spirit/include/phoenix_operator.hpp>
+#include <boost/spirit/include/phoenix_stl.hpp>
+
+namespace pls {
+namespace qi = boost::spirit::qi;
+namespace ascii = boost::spirit::ascii;
+namespace phoenix = boost::phoenix;
+
+///////////////////////////////////////////////////////////////////////////
+//  Our number list compiler
+///////////////////////////////////////////////////////////////////////////
+//[tutorial_numlist2
+template <typename Iterator>
+bool parse_numbers(Iterator first, Iterator last, std::vector<double> &v) {
+  using qi::double_;
+  using qi::_1;
+  using ascii::space;
+  using phoenix::push_back;
+
+  bool r = qi::parse(first, last,
+
+                        //  Begin grammar
+                        (double_[push_back(phoenix::ref(v), _1)] >>
+                         *(',' >> double_[push_back(phoenix::ref(v), _1)]))
+                        //  End grammar
+                        );
+
+  if (first != last) // fail if we did not get a full match
+    return false;
+  return r;
+}
+//]
+}
 
 using namespace std;
 
@@ -48,7 +84,6 @@ int main() { // int ac, char **av
     // [SAMPLE1 .. SAMPLEN]
     vector<string> cols;
     boost::split(cols, input, boost::is_any_of("\t"));
-
     // figure out which column the PL format tag is in
     if (!PLColNumDefined) {
       vector<string> format;
@@ -66,32 +101,47 @@ int main() { // int ac, char **av
          << cols[4];
 
     for (size_t colNum = 9; colNum < cols.size(); ++colNum) {
-      vector<string> sampFormat;
-      boost::split(sampFormat, cols[colNum], boost::is_any_of(":"));
-      vector<string> PLs;
-      boost::split(PLs, sampFormat[PLColNum], boost::is_any_of(","));
+
+      // find index of first char of the PL format
+      size_t sepCharIdx = 0;
+      size_t firstPLCharIdx = 0;
+      for (size_t formatField = 0; formatField < PLColNum; ++formatField) {
+        sepCharIdx = cols[colNum].find_first_of(":", firstPLCharIdx);
+        firstPLCharIdx = sepCharIdx + 1;
+      }
+
+      // find iter to one past last char
+      sepCharIdx = cols[colNum].find_first_of(":\t\n", firstPLCharIdx);
+      auto sepCharIter = cols[colNum].end();
+      if(sepCharIdx != string::npos)
+          sepCharIter = cols[colNum].begin() + sepCharIdx;
+      
+      vector<double> PLs;
+      if (!pls::parse_numbers(cols[colNum].begin() + firstPLCharIdx,
+                              sepCharIter, PLs))
+        throw std::runtime_error(
+            "Could not parse string: \"" +
+            cols[colNum].substr(firstPLCharIdx, sepCharIdx - firstPLCharIdx) + '"');
 
       assert(PLs.size() == 3);
-      vector<double> GLs;
-      GLs.reserve(3);
-      for (auto pl : PLs)
-        GLs.push_back(pow(10, -stod(pl) / 10));
+      for (auto &pl : PLs)
+        pl = pow(10, -pl / 10);
 
-      for (auto gl : GLs) {
+      for (auto gl : PLs) {
         assert(gl <= 1);
         assert(gl >= 0);
       }
 
       // now normalize PLs and print in gen format
-      double sum = GLs[0] + GLs[1] + GLs[2];
-      if (GLs[0] != 1 || GLs[1] != 1 || GLs[2] != 1)
-        for (auto &gl : GLs)
+      double sum = PLs[0] + PLs[1] + PLs[2];
+      if (PLs[0] != 1 || PLs[1] != 1 || PLs[2] != 1)
+        for (auto &gl : PLs)
           gl /= sum;
       else
-        for (auto &gl : GLs)
+        for (auto &gl : PLs)
           gl = 0;
 
-      for (auto gl : GLs)
+      for (auto gl : PLs)
         cout << " " << gl;
     }
     cout << "\n";
