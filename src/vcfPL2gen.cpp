@@ -4,149 +4,86 @@
 #include <iostream>
 #include <boost/algorithm/string.hpp>
 #include <boost/algorithm/string/split.hpp>
-#include <boost/config/warning_disable.hpp>
-#include <boost/spirit/include/qi.hpp>
-#include <boost/spirit/include/phoenix_core.hpp>
-#include <boost/spirit/include/phoenix_operator.hpp>
-#include <boost/spirit/include/phoenix_stl.hpp>
-
-namespace pls {
-namespace qi = boost::spirit::qi;
-namespace ascii = boost::spirit::ascii;
-namespace phoenix = boost::phoenix;
-
-///////////////////////////////////////////////////////////////////////////
-//  Our number list compiler
-///////////////////////////////////////////////////////////////////////////
-//[tutorial_numlist2
-template <typename Iterator>
-bool parse_numbers(Iterator first, Iterator last, std::vector<double> &v) {
-  using qi::double_;
-  using qi::_1;
-  using ascii::space;
-  using phoenix::push_back;
-
-  bool r = qi::parse(first, last,
-
-                        //  Begin grammar
-                        (double_[push_back(phoenix::ref(v), _1)] >>
-                         *(',' >> double_[push_back(phoenix::ref(v), _1)]))
-                        //  End grammar
-                        );
-
-  if (first != last) // fail if we did not get a full match
-    return false;
-  return r;
-}
-//]
-}
+#include <htslib/hts.h>
+#include <htslib/vcf.h>
+#include <exception>
 
 using namespace std;
 
 static_assert(__cplusplus == 201103L, "C++11 compiler required");
 
-int main() { // int ac, char **av
+int main(int ac, char *av[]) {
 
-  // expect vcf formatted file as input
-  string input;
+  if (ac != 2)
+    throw std::runtime_error(
+        "Please specify exactly one input file on command line");
 
-  // pass on header
-  while (getline(cin, input)) {
-    if (input[0] == '#' && input[1] == 'C')
-      break;
-  }
-
-  // count number of columns in chrom line
-  size_t numCols = std::count(input.begin(), input.end(), '\t') + 1;
-  if (numCols < 7) {
-    cerr << "Too few columns in VCF CHROM line (less than 7 columns)" << endl;
-    cerr << "Malformed line: " << input << endl;
-    exit(1);
-  }
-
-  // parse lines
+  // expect vcf/bcf formatted file as input
+  string inFile(av[1]);
+  htsFile *fp = hts_open(av[1], "r");
+  bcf_hdr_t *hdr = bcf_hdr_read(fp);
+  bcf1_t *rec = bcf_init1();
   unsigned outLines(0);
-  bool PLColNumDefined = false;
-  size_t PLColNum = 0; // needs to be made >= 0 later
-  while (getline(cin, input)) {
-    if (outLines % 1000 == 0)
+  cout << std::fixed;
+  cout.precision(5);
+  while (bcf_read1(fp, hdr, rec) >= 0) {
+
+    if ((outLines & (1024 - 1)) == 0)
       cerr << "\rNumber of Lines output: " << outLines;
 
-    assert(input[0] != '#');
+    // get the first five and sample columns
+    bcf_unpack(rec, BCF_UN_STR | BCF_UN_IND);
 
-    // otherwise parse the line and do some splitting!
-
-    // data to hold results of parsing
-    // parsedFirstFewCols will hold columns 1-9, but excluding 2, which will be
-    // in genomic_pos
-
-    // #CHROM  POS     ID      REF     ALT     QUAL    FILTER  INFO    FORMAT
-    // [SAMPLE1 .. SAMPLEN]
-    vector<string> cols;
-    boost::split(cols, input, boost::is_any_of("\t"));
-    // figure out which column the PL format tag is in
-    if (!PLColNumDefined) {
-      vector<string> format;
-      boost::split(format, cols[8], boost::is_any_of(":"));
-      for (unsigned colNum = 0; colNum != format.size(); ++colNum)
-        if (format[colNum] == "PL") {
-          PLColNum = colNum;
-          PLColNumDefined = true;
-          break;
-        }
-    }
+    // make sure the PL field exists in format
+    assert(bcf_get_fmt(hdr, rec, "PL"));
 
     // print out position information
-    cout << cols[0] << " " << cols[1] << " " << cols[1] << " " << cols[3] << " "
-         << cols[4];
+    // CHROM POS POS REF ALT
+    cout << bcf_hdr_id2name(hdr, rec->rid) << " " << (rec->pos + 1) << " "
+         << (rec->pos + 1) << " " << rec->d.allele[0] << " "
+         << rec->d.allele[1];
 
-    for (size_t colNum = 9; colNum < cols.size(); ++colNum) {
+    int npl_arr = 0, mpl_arr = 0;
+    int32_t *pl_arr = NULL;
+    npl_arr = bcf_get_format_int32(hdr, rec, "PL", &pl_arr, &mpl_arr);
+    if (npl_arr > 0) {
 
-      // find index of first char of the PL format
-      size_t sepCharIdx = 0;
-      size_t firstPLCharIdx = 0;
-      for (size_t formatField = 0; formatField < PLColNum; ++formatField) {
-        sepCharIdx = cols[colNum].find_first_of(":", firstPLCharIdx);
-        firstPLCharIdx = sepCharIdx + 1;
-      }
+      assert(npl_arr / 3 == bcf_hdr_nsamples(hdr));
+      int nvals = npl_arr / bcf_hdr_nsamples(hdr);
+      int32_t *ptr = pl_arr;
+      assert(nvals == 3);
+      for (int i = 0; i < bcf_hdr_nsamples(hdr); ++i) {
 
-      // find iter to one past last char
-      sepCharIdx = cols[colNum].find_first_of(":\t\n", firstPLCharIdx);
-      auto sepCharIter = cols[colNum].end();
-      if(sepCharIdx != string::npos)
-          sepCharIter = cols[colNum].begin() + sepCharIdx;
-      
-      vector<double> PLs;
-      PLs.reserve(3);
-      if (!pls::parse_numbers(cols[colNum].begin() + firstPLCharIdx,
-                              sepCharIter, PLs))
-        throw std::runtime_error(
-            "Could not parse string: \"" +
-            cols[colNum].substr(firstPLCharIdx, sepCharIdx - firstPLCharIdx) + '"');
+        vector<double> PLs(3);
+        for (int j = 0; j < nvals; ++j) {
+          if (ptr[j] == bcf_int32_vector_end)
+            throw std::runtime_error("unexpected end of PLs");
+          if (ptr[j] == bcf_int32_missing)
+            throw std::runtime_error("missing PL value encountered");
+          PLs[j] = pow(10, -static_cast<double>(ptr[j]) / 10);
+        }
+        ptr += nvals;
 
-      assert(PLs.size() == 3);
-      for (auto &pl : PLs)
-        pl = pow(10, -pl / 10);
+        for (auto gl : PLs) {
+          assert(gl <= 1);
+          assert(gl >= 0);
+        }
 
-      for (auto gl : PLs) {
-        assert(gl <= 1);
-        assert(gl >= 0);
-      }
-
-      // now normalize PLs and print in gen format
-      double sum = PLs[0] + PLs[1] + PLs[2];
-      if (PLs[0] != 1 || PLs[1] != 1 || PLs[2] != 1)
+        // now normalize PLs and print in gen format
+        double sum = PLs[0];
+        sum += PLs[1];
+        sum += PLs[2];
         for (auto &gl : PLs)
-          gl /= sum;
-      else
-        for (auto &gl : PLs)
-          gl = 0;
+          cout << " " << (gl / sum);
+      }
+      cout << "\n";
+      ++outLines;
 
-      for (auto gl : PLs)
-        cout << " " << gl;
+    } else {
+      free(pl_arr);
+      throw std::runtime_error("could not read record");
     }
-    cout << "\n";
-    ++outLines;
+    free(pl_arr);
   }
 
   return 0;

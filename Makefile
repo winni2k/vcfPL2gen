@@ -12,9 +12,9 @@ CVERS= -std=c++11
 #linker flags
 LOPTI= -O3
 LDEBG= -g -O0
-LSTDD= -lm 
-LSTDS= -Wl,-Bstatic -Wl,-Bdynamic -lm 
-LCL3S= -Wl,-Bstatic -Wl,-Bdynamic -lm
+LSTDD= -lm -lhts -lpthread
+LSTDS= -Wl,-Bstatic -Wl,-Bdynamic -lm -lhts -lpthread
+LCL3S= -Wl,-Bstatic -Wl,-Bdynamic -lm -lhts -lpthread
 LBAMD= -lbam -lz
 
 #executable file
